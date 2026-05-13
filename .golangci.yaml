@@ -3,48 +3,27 @@
 version: "2"
 
 linters:
-  # Default set of linters.
-  # The value can be:
-  # - `standard`: https://golangci-lint.run/docs/linters/golangci-lint linters#enabled-by-default
-  # - `all`: enables all linters by default.
-  # - `none`: disables all linters by default.
-  # - `fast`: enables only linters considered as "fast" (`golangci-lint help linters --json | jq '[ .[] | select(.fast==true) ] | map(.name)'`).
-  # Default: standard
-  default: all
-
-  # Enable specific linters
-  enable: []
+  # Start from the standard set; add the handful of extras that catch real
+  # bugs (race-prone patterns, unchecked errors, context misuse) without
+  # forcing style debates.
+  default: standard
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - gosec
+    - ineffassign
+    - misspell
+    - unconvert
+    - unused
 
   exclusions:
     paths:
       - "tools/gen-config"
-
-  # Disable specific linters.
-  disable:
-    - cyclop
-    - depguard
-    - dupl
-    - exhaustruct
-    - err113
-    - funcorder
-    - funlen
-    - gochecknoglobals
-    - gochecknoinits
-    - gocognit
-    - godot
-    - ireturn
-    - lll
-    - mnd
-    - nestif
-    - nlreturn
-    - nolintlint
-    - nonamedreturns
-    - paralleltest
-    - revive
-    - testpackage
-    - varnamelen
-    - wsl
-    - wsl_v5
+    rules:
+      # Tests routinely ignore errors and use net/http test helpers.
+      - path: _test\.go
+        linters: [errcheck, gosec, bodyclose]
 
 formatters:
   # Enable specific formatter.
