@@ -4,17 +4,17 @@ import (
 	"fmt"
 )
 
-// These variables will be set at build time
+// These variables will be set at build time via -ldflags.
 var (
-	AppName    string = "tailsocks"
-	AppVersion string = "canary"
+	AppName    = "flotilla"
+	AppVersion = "canary"
 	BuildId    string
 	CommitHash string
 	BuildDate  string
 	Production string
 )
 
-// BuildDescription set during initialization
+// BuildDescription set during initialization.
 var BuildDescription string
 
 func init() {

@@ -1,266 +1,162 @@
-# TailSocks
+# Flotilla
 
-Route traffic through any Tailscale exit node using a local SOCKS5 proxy.
+> A fleet of Tailscale exit-node proxies in a single binary.
+> One SOCKS5 port + one HTTP CONNECT port in front of N independent Tailnet
+> nodes — round-robin, sticky, tag-routed, with health probes and Prometheus
+> metrics. Built for scrapers that need clean IP rotation without juggling
+> N daemons.
 
-## What is TailSocks?
-
-TailSocks creates a local SOCKS5 proxy server that automatically routes all traffic through a Tailscale exit node of your choice. This gives you the flexibility to:
-
-- **Route specific applications** through your Tailscale network without affecting your entire system
-- **Use different exit nodes** for different applications simultaneously
-- **Access your Tailnet resources** from applications that support SOCKS5 proxies
-- **Bypass VPN limitations** in applications that don't support traditional VPNs
-
-## Use Cases
-
-- **Selective routing**: Route only specific applications (browsers, CLI tools, etc) through your Tailscale network
-- **Testing**: Test how your services behave from different network locations
-- **Development**: Access development resources on your Tailnet without configuring your entire system
-- **Privacy**: Route sensitive traffic through your home or office network
-- **Multiple exit nodes**: Run multiple instances with different exit nodes for different purposes
-
-## Installation
-
-### Pre-built binaries
-
-You can download the latest version of TailSocks from the [**Releases page**](https://github.com/italypaleale/tailsocks/releases) page.
-
-Fetch the correct archive for your system and architecture, then extract the files and copy the `tailsocks` binary to `/usr/local/bin` or another folder.
-
-> **Mac users:** binaries are not signed by Apple and you may get a security warning when trying to run them on your Mac.
->
-> To fix this, run this command: `xattr -rc path/to/tailsocks`
-
-### Using Docker/Podman
-
-You can run TailSocks as a Docker/Podman container. Container images are available for Linux and support amd64, arm64, and armv7/armhf.
-
-```sh
-# For podman, replace "docker run" with "podman run"
-docker run \
-  -d \
-  --rm \
-  ghcr.io/italypaleale/tailsocks:1
+```
+      ┌────────── flotilla ─────────┐
+SOCKS ─┤ :5040  ──┐                 │
+HTTP  ─┤ :5050  ──┼─ Pool.Pick ─┐   │
+admin ─┤ :8080    │             │   │
+      └───────────┼─────────────┼───┘
+                  │             │
+   ┌──────────────┴───────┐ ┌───┴──────────┐
+   │ Worker tr-1          │ │ Worker eu-1  │
+   │ tsnet, exit=tr-ist-1 │ │ exit=eu-ams  │
+   └──────────────────────┘ └──────────────┘
 ```
 
-> TailSocks follows semver for versioning. The command above uses the latest version in the 1.x branch. We do not publish a container image tagged "latest".
+Flotilla is a fork of [ItalyPaleAle/tailsocks][upstream] that adds:
 
-### Build from source
+- **Pool mode**: N workers in one process, each a fully independent
+  `tsnet.Server` pinned to its own exit node.
+- **Strategies**: `round_robin`, `random`, `sticky`, `least_active`, `tagged`.
+- **HTTP CONNECT** dispatcher alongside SOCKS5 (use header `X-Flotilla-Node`
+  or `X-Flotilla-Tags` to influence routing per-request).
+- **Health probes** + per-node egress IP discovery.
+- **Prometheus metrics** at `/metrics` and a JSON admin API.
+- **YAML config** with sane defaults; legacy single-node CLI flags retained.
 
-Using `go install`:
+[upstream]: https://github.com/ItalyPaleAle/tailsocks
 
-```sh
-go install github.com/italypaleale/tailsocks@latest
+---
+
+## Quick start (Docker Compose)
+
+```bash
+# 1) grab the compose file
+curl -O https://raw.githubusercontent.com/mamidevs/flotilla/main/docker-compose.example.yaml
+mv docker-compose.example.yaml docker-compose.yaml
+
+# 2) drop a config in place (edit the node list to your exit nodes)
+docker run --rm ghcr.io/mamidevs/flotilla:latest init > flotilla.yaml
+
+# 3) provide auth — either OAuth2 creds or a static key
+echo '{"client_id":"...","client_secret":"tskey-client-...","tag":"flotilla"}' > oauth2.json
+# or:  echo "TS_AUTHKEY=tskey-..." > .env
+
+# 4) up you go
+docker compose up -d
+curl --socks5 127.0.0.1:5040 https://api.ipify.org   # → exit-node IP 1
+curl --socks5 127.0.0.1:5040 https://api.ipify.org   # → exit-node IP 2 (round-robin)
+curl http://127.0.0.1:8080/health/nodes | jq
 ```
 
-Or clone from the Git repo:
+## Quick start (Go)
 
-```sh
-git clone https://github.com/italypaleale/tailsocks
-cd tailsocks
-go build -o tailsocks
+```bash
+go install github.com/mamidevs/flotilla/cmd/flotilla@latest
+flotilla init -o flotilla.yaml
+$EDITOR flotilla.yaml
+TS_AUTHKEY=tskey-... flotilla run --config flotilla.yaml
 ```
 
-## Quick Start
+## Single-node (tailsocks-compatible)
 
-1. **Start TailSocks with an exit node:**
+If you just want the original tailsocks behavior on this machine, all the
+classic flags still work:
 
-   ```sh
-   tailsocks --exit-node my-exit-node
-   ```
-
-   The exit node can be specified as:
-
-     - An IP address (e.g., `100.64.1.2`)
-     - A MagicDNS name (e.g., `my-exit-node`)
-
-2. **Configure your application** to use the SOCKS5 proxy at `127.0.0.1:5040`
-
-Your application traffic will now route through the specified Tailscale exit node.
-
-## Usage
-
-### Basic Usage
-
-```sh
-# Use a specific exit node
-tailsocks --exit-node home-server
-
-# Use a custom SOCKS5 listen address
-tailsocks --exit-node home-server --socks-addr 127.0.0.1:8080
-
-# Allow LAN access while using the exit node
-tailsocks --exit-node home-server --exit-node-allow-lan-access
+```bash
+flotilla run --exit-node home-server --socks-addr 127.0.0.1:5040
 ```
 
-### Authentication
+## Routing hints
 
-TailSocks will use your existing Tailscale authentication. If you're not logged in, you can provide an auth key:
+| Method | Selector | Example |
+|---|---|---|
+| HTTP CONNECT pin | `X-Flotilla-Node` header | `curl -x http://127.0.0.1:5050 -H "X-Flotilla-Node: tr-1" https://api.ipify.org` |
+| HTTP CONNECT filter | `X-Flotilla-Tags` header | `-H "X-Flotilla-Tags: region:tr"` |
+| HTTP sticky override | `X-Flotilla-Client` header | `-H "X-Flotilla-Client: scraper-42"` |
+| SOCKS5 pin | RFC1929 user field | `curl --socks5 'node=tr-1:anything@127.0.0.1:5040' …` |
+| SOCKS5 filter | RFC1929 user field | `curl --socks5 'tags=region:tr:any@127.0.0.1:5040' …` |
+| SOCKS5 sticky | source IP (default) | implicit per client |
 
-```sh
-# Via flag
-tailsocks --exit-node home-server --authkey tskey-auth-xxxxx
+## Strategies
 
-# Via environment variable
-export TS_AUTHKEY=tskey-auth-xxxxx
-tailsocks --exit-node home-server
+| `dispatch.strategy` | Behavior |
+|---|---|
+| `round_robin` | Atomic counter mod N, deterministic. The default. |
+| `random` | Uniform random pick. |
+| `sticky` | `fnv1a(ClientID) % N`. Pin a client to one worker; consistent across reconnects. |
+| `least_active` | Pick the worker with the fewest in-flight connections. |
+| `tagged` | Pool first filters by request tags, then round-robins the survivors. |
+
+Pin / tag hints survive every strategy. A `node=tr-1` hint always wins.
+
+## Endpoints
+
+| Port | Purpose |
+|---|---|
+| `:5040` | Dispatcher SOCKS5 (RFC1928) — picks a worker per request. |
+| `:5050` | Dispatcher HTTP CONNECT + forward proxy. |
+| `:5041+` | Optional per-worker direct SOCKS5 listeners (configurable). |
+| `:8080/health` | 200 if at least one worker is healthy. |
+| `:8080/health/nodes` | JSON of every worker's status. |
+| `:8080/ip` | Per-node public egress IP map. |
+| `:8080/ip?node=X` | One node. |
+| `:8080/metrics` | Prometheus scrape. |
+
+## Prometheus metrics
+
+```
+flotilla_requests_total{node, protocol, result}
+flotilla_request_duration_seconds{node, protocol}
+flotilla_active_connections{node}
+flotilla_node_up{node}
+flotilla_node_egress_ip_info{node, egress_ip}
+flotilla_pool_pick_total{strategy, node, result}
 ```
 
-If there's no existing authentication state, you will see a URL to authenticate your node in the logs.
+## What's different from tailsocks?
 
-### Authentication with OAuth2 client credentials
+| Feature | tailsocks | flotilla |
+|---|---|---|
+| Run mode | one binary, one exit | one binary, **N** exits |
+| Dispatch | n/a | round_robin / random / sticky / least_active / tagged |
+| HTTP CONNECT proxy | ✗ | ✓ |
+| YAML config | ✗ | ✓ (CLI flags still work for single-node) |
+| Per-request worker pinning | ✗ | ✓ (header or SOCKS5 user) |
+| Health probes | ✗ | ✓ |
+| Prometheus metrics | ✗ | ✓ |
+| OAuth2 + ephemeral keys | ✓ | ✓ (inherited verbatim) |
+| MagicDNS / split-DNS resolver | ✓ | ✓ (inherited verbatim) |
 
-Alternatively to using auth keys, you can provide [OAuth2 client credentials](https://tailscale.com/kb/1215/oauth-clients) for the Tailscale control plane. These are long-lived credentials that can be used repeatedly to register multiple nodes, and each node does not require manual approval (however, if Tailnet Lock is enabled, you will need to sign each created node manually).
+If you want plain "one client → one exit node," **stick with upstream
+tailsocks** — Flotilla is the choice when you need a pool.
 
-1. Create a new OAuth2 client:
-   1. Open the [**Trust credentials**](https://login.tailscale.com/admin/settings/trust-credentials) page of the Tailscale admin console. Select the Credential button, then choose OAuth.
-   2. In the list of scopes, select only **Auth keys** with **write** access. This requires the name of an ACL tag that must be used for the nodes created with the OAuth2 client.
-   3. Copy both the client ID and secret.
-2. Create a local file with the credentials stored in `~/.config/tailsocks/oauth2.json` (`%USERPROFILE%/.config/tailsocks/oauth2.json` on Windows) with the client ID, client secret, and name of the tag:
+## Building
 
-   ```json
-   {
-     "client_id": "...",
-     "client_secret": "tskey-client-...",
-     "tag": "tag-name"
-   }
-   ```
-
-Run TailSocks with the `--oauth2` (or `-o`) option to use OAuth2 credentials:
-
-```sh
-tailsocks --exit-node home-server --oauth2
+```bash
+make build           # ./flotilla
+make test            # go test -race ./...
+make lint            # golangci-lint run
+make docker          # local container image
 ```
 
-**Note:** when using OAuth2 credentials, nodes are registered as ephemeral by default. To make them persistent, use `--ephemeral=false`:
+## Credits
 
-```sh
-tailsocks --exit-node home-server --oauth2 --ephemeral=false
-```
+Flotilla is a fork of [`ItalyPaleAle/tailsocks`][upstream] (MIT). The
+upstream code carries the heavy lifting:
 
-### Custom Tailscale Control Server
+- `internal/auth` — OAuth2 client-credentials → ephemeral auth key flow.
+- `internal/resolver` — MagicDNS / split-DNS resolver for SOCKS5.
+- `internal/worker` — `tsnet.Server` lifecycle + `SetExitNodeIP` glue.
 
-If you're using Headscale or another custom control server:
-
-```sh
-tailsocks --exit-node home-server --login-server https://headscale.example.com
-```
-
-## Command-Line Options
-
-```text
-Usage of tailsocks:
-  -x, --exit-node string             Exit node selector: IP or MagicDNS base name (e.g. 'home-exit'). Required.
-  -k, --authkey string               Optional Tailscale auth key (or set TS_AUTHKEY env var; if omitted, loads from disk or prompts)
-  -e, --ephemeral                    Make this node ephemeral (auto-cleanup on disconnect)
-  -l, --exit-node-allow-lan-access   Allow access to local LAN while using exit node
-  -n, --hostname string              Tailscale node name (hostname) (default "tailsocks")
-      --local-dns                    Use local DNS resolver instead of resolving DNS through Tailscale
-  -c, --login-server string          Optional control server URL (e.g. https://controlplane.tld for Headscale)
-  -o, --oauth2                       Use OAuth2 credentials for authentication. When set, node is ephemeral by default.
-  -a, --socks-addr string            SOCKS5 listen address (default "127.0.0.1:5040")
-  -s, --state-dir string             Directory to store tsnet state (default "./tsnet-state")
-  -v, --version                      Show version
-  -h, --help                         Show this help message
-```
-
-## Configuring Applications
-
-### Web Browsers
-
-**Firefox:**
-
-1. Settings → Network Settings → Configure how Firefox connects to the internet
-2. Select "Manual proxy configuration"
-3. SOCKS Host: `127.0.0.1`, Port: `5040`
-4. Select "SOCKS v5"
-
-**Chrome/Chromium:**
-
-```sh
-chrome --proxy-server="socks5://127.0.0.1:5040"
-```
-
-### Command-Line Tools
-
-Many CLI tools support SOCKS5 proxies via environment variables:
-
-```sh
-# Will use your exit node's IP
-curl https://api.ipify.org --proxy socks5://127.0.0.1:5040
-```
-
-**Git:**
-
-```sh
-git config --global http.proxy socks5://127.0.0.1:5040
-```
-
-**SSH:**
-
-```sh
-ssh -o ProxyCommand="nc -X 5 -x 127.0.0.1:5040 %h %p" user@host
-```
-
-## Examples
-
-### Route Firefox through your home network
-
-```sh
-# Start TailSocks with your home exit node
-tailsocks --exit-node home-server
-
-# Configure Firefox to use SOCKS5 proxy at 127.0.0.1:5040
-# Now browse with your home IP address
-```
-
-### Access internal development resources
-
-```sh
-# Start TailSocks (no exit node needed to access Tailnet)
-tailsocks --exit-node office-node
-
-# Use curl with the proxy
-curl http://internal-service.tailnet --proxy socks5h://127.0.0.1:5040
-```
-
-### Run multiple instances for different exit nodes
-
-```sh
-# Terminal 1: Route through home
-tailsocks --exit-node home --socks-addr 127.0.0.1:5040 --state-dir ./state-home
-
-# Terminal 2: Route through office
-tailsocks --exit-node office --socks-addr 127.0.0.1:5041 --state-dir ./state-office
-
-# Now configure different apps to use different proxies
-```
-
-## Troubleshooting
-
-**TailSocks won't start:**
-
-- Ensure the exit node name or IP is correct
-- Check that you have permission to use the exit node in your Tailscale settings
-- Verify your Tailscale authentication is valid
-
-**Traffic not routing through exit node:**
-
-- Confirm your application is properly configured to use the SOCKS5 proxy
-- Check that the SOCKS5 address and port match TailSocks' listen address
-- Verify the exit node is online and accessible
-- Check Tailscale ACL to ensure that your node can use the exit node (destination name is `autogroup:internet`)
-
-**Tailscale Magic DNS isn't working:**
-
-- Ensure that you have configured your application to use the DNS resolver over the SOCKS5 proxy. For example, curl requires the use of `socks5h://` as protocol
-- Ensure that Magic DNS is enabled in your Tailnet
-- Ensure that Tailsocks is not running with the `--local-dns` flag
-
-**Can't access LAN resources:**
-
-- Use the `--exit-node-allow-lan-access` flag
+See [`NOTICE`](./NOTICE) for the full attribution.
 
 ## License
 
-[MIT](./LICENSE.md)
+[MIT](./LICENSE.md).

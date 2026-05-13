@@ -1,4 +1,7 @@
-package main
+// Package resolver bridges go-socks5's NameResolver to Tailscale's
+// LocalAPI so that MagicDNS / split-DNS work transparently inside the
+// proxy. Ported from upstream tailsocks/resolver.go.
+package resolver
 
 import (
 	"context"
@@ -17,19 +20,19 @@ import (
 
 const (
 	maxCacheTTL = 5 * time.Minute
-	// minCacheTTL is the floor applied before handing a TTL to the cache
 	minCacheTTL = time.Second
 )
 
-// TailscaleResolver resolves DNS names through Tailscale
+// TailscaleResolver resolves DNS names through Tailscale.
 type TailscaleResolver struct {
 	lc             *local.Client
 	magicDNSSuffix string
 	cache          *ttlcache.Cache[string, net.IP]
 }
 
-// NewTailscaleResolver creates a new resolver that performs DNS lookups through Tailscale
-func NewTailscaleResolver(lc *local.Client, magicDNSSuffix string) *TailscaleResolver {
+// New creates a resolver that performs DNS lookups through Tailscale.
+// Results are cached for up to 5 minutes or the record's TTL, whichever is shorter.
+func New(lc *local.Client, magicDNSSuffix string) *TailscaleResolver {
 	return &TailscaleResolver{
 		lc:             lc,
 		magicDNSSuffix: magicDNSSuffix,
@@ -39,17 +42,13 @@ func NewTailscaleResolver(lc *local.Client, magicDNSSuffix string) *TailscaleRes
 	}
 }
 
-// Resolve implements socks5.NameResolver
-// It resolves the given hostname to an IP address using Tailscale.
-// Results are cached for up to 5 minutes or the record's TTL, whichever is shorter.
+// Resolve implements socks5.NameResolver.
 func (r *TailscaleResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	// Check cache first
 	cached, ok := r.cache.Get(name)
 	if ok {
 		return ctx, cached, nil
 	}
 
-	// Perform lookups for A and AAA records in parallel
 	type resMsg struct {
 		records []netip.Addr
 		ttl     time.Duration
@@ -63,23 +62,14 @@ func (r *TailscaleResolver) Resolve(ctx context.Context, name string) (context.C
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		records, ttl, err := r.resolveDNS(ctx, name, "A")
-		res.A = resMsg{
-			records: records,
-			ttl:     ttl,
-			err:     err,
-		}
+		res.A = resMsg{records: records, ttl: ttl, err: err}
 	})
 	wg.Go(func() {
 		records, ttl, err := r.resolveDNS(ctx, name, "AAA")
-		res.AAA = resMsg{
-			records: records,
-			ttl:     ttl,
-			err:     err,
-		}
+		res.AAA = resMsg{records: records, ttl: ttl, err: err}
 	})
 	wg.Wait()
 
-	// Check if we have an A record first, then AAAA
 	if res.A.err == nil && len(res.A.records) > 0 {
 		ip := res.A.records[0].AsSlice()
 		r.cache.Set(name, ip, clampCacheTTL(res.A.ttl))
@@ -91,23 +81,12 @@ func (r *TailscaleResolver) Resolve(ctx context.Context, name string) (context.C
 		return ctx, ip, nil
 	}
 
-	// If we're here, we didn't have a result
-	// First, check if we had an error for A (we ignore errors for AAA)
 	if res.A.err != nil {
 		return ctx, nil, res.A.err
 	}
-
-	// Return a generic "no addresses found"
 	return ctx, nil, fmt.Errorf("no addresses found for '%s'", name)
 }
 
-// resolveDNS performs DNS resolution using a behavior like Tailscale.
-// It supports A and AAA records as qt.
-//
-// - If name contains a dot (.) it's treated as "already qualified": no expansion
-// - If name is short (no dot), first try "name." (root-relative)
-// - If that returns NXDOMAIN, retry "name.<MagicDNSSuffix>.
-// - Uses tailscaled LocalAPI (QueryDNS), so it supports MagicDNS/split DNS
 func (r *TailscaleResolver) resolveDNS(ctx context.Context, name string, qt string) ([]netip.Addr, time.Duration, error) {
 	name = strings.TrimSpace(name)
 	isShort := !strings.Contains(name, ".") && !strings.HasSuffix(name, ".")
@@ -118,10 +97,8 @@ func (r *TailscaleResolver) resolveDNS(ctx context.Context, name string, qt stri
 		return nil, 0, fmt.Errorf("QueryDNS(%q, %s): %w", baseQname, qt, err)
 	}
 
-	// If NXDOMAIN and it's a short name, try expanded query
 	if isShort && r.isNXDOMAIN(res) && r.magicDNSSuffix != "" {
 		expanded := r.expandWithSuffix(name, r.magicDNSSuffix)
-
 		res2, _, err := r.lc.QueryDNS(ctx, expanded, qt)
 		if err != nil {
 			return nil, 0, fmt.Errorf("QueryDNS(%q, %s): %w", expanded, qt, err)
@@ -140,8 +117,6 @@ func (r *TailscaleResolver) resolveDNS(ctx context.Context, name string, qt stri
 	return addrs, ttl, nil
 }
 
-// clampCacheTTL bounds a DNS-derived TTL to the range [minCacheTTL, maxCacheTTL] before it is handed to ttlcache.Set, which panics on TTLs below 1ms
-// Upstream DNS can legitimately return TTL=0 (e.g. CDN load-balancer records)
 func clampCacheTTL(ttl time.Duration) time.Duration {
 	if ttl < minCacheTTL {
 		return minCacheTTL
@@ -203,7 +178,6 @@ func (r *TailscaleResolver) parseAandAAAA(resp []byte) (addrs []netip.Addr, ttl 
 			return nil, 0, fmt.Errorf("error from DNS message parser AnswerHeader: %w", err)
 		}
 
-		// Track the minimum TTL from all records
 		if minTTL == 0 || ah.TTL < minTTL {
 			minTTL = ah.TTL
 		}

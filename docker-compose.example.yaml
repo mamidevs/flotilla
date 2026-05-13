@@ -1,0 +1,41 @@
+# docker-compose.example.yaml — one-command Flotilla deployment.
+#
+# Usage:
+#   1. Copy this file to docker-compose.yaml and edit it.
+#   2. Drop your Tailscale OAuth2 credentials at ./oauth2.json
+#      (or set TS_AUTHKEY in .env if you prefer static keys).
+#   3. Edit ./flotilla.yaml with your exit-node names.
+#   4. docker compose up -d
+#
+# The service exposes:
+#   - 5040/tcp  → dispatcher SOCKS5  (round-robin across all exits)
+#   - 5050/tcp  → dispatcher HTTP CONNECT proxy
+#   - 8080/tcp  → admin: /health, /health/nodes, /ip, /metrics
+services:
+  flotilla:
+    image: ghcr.io/mamidevs/flotilla:latest
+    # Or build locally:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "127.0.0.1:5040:5040"   # SOCKS5
+      - "127.0.0.1:5050:5050"   # HTTP CONNECT
+      - "127.0.0.1:8080:8080"   # admin / metrics
+    volumes:
+      - ./flotilla.yaml:/etc/flotilla/flotilla.yaml:ro
+      - ./oauth2.json:/etc/flotilla/oauth2.json:ro
+      - state:/state
+    environment:
+      # Optional: feed an OAuth2 access token directly (CI / federated flows).
+      # TS_OAUTH_ACCESS_TOKEN: ${TS_OAUTH_ACCESS_TOKEN:-}
+      # TS_OAUTH_TAG:          ${TS_OAUTH_TAG:-}
+      # Optional: feed a static key.
+      # TS_AUTHKEY:            ${TS_AUTHKEY:-}
+      TZ: UTC
+
+volumes:
+  state: {}

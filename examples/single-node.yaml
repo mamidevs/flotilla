@@ -1,0 +1,24 @@
+# Minimal single-node config — tailsocks-compatible behavior.
+listen:
+  socks: 127.0.0.1:5040
+  admin: 127.0.0.1:8080
+
+log:
+  level: info
+  format: auto
+
+dispatch:
+  strategy: round_robin
+  health_check:
+    enabled: true
+    interval: 30s
+    skip_unhealthy: true
+    egress_ip_lookup: true
+
+auth:
+  method: authkey   # supply TS_AUTHKEY env var
+
+nodes:
+  - name: solo
+    exit_node: home-server     # ← replace with your exit node's MagicDNS name or 100.x IP
+    state_dir: ./state/solo

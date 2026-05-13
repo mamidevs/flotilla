@@ -1,240 +1,96 @@
-name: Continuous Integration
+name: CI
 
 on:
   push:
-    branches:
-      - master
-      - main
-      - v*
+    branches: [main, master]
   pull_request:
-    branches:
-      - master
-      - main
-      - v*
+    branches: [main, master]
+
+permissions:
+  contents: read
 
 jobs:
-
   test:
-    name: Test
+    name: Test + Vet
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     env:
-      GOLANGCI_LINT_VERSION: "v2.11.4"
       CGO_ENABLED: "0"
     steps:
+      - uses: actions/checkout@v4
 
-      - name: Check out code
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
-          # Use cache from golangci-lint
-          cache: false
+          go-version-file: go.mod
+          cache: true
 
-      - name: Check Go dependency minimum age
+      - name: Verify modules
         run: |
-          go install github.com/fchimpan/gomod-age@09005169a4792ad1a4824e1fc6d85785d91cea36
-          gomod-age
+          go mod download
+          go mod verify
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race + cover)
+        run: go test -race -count=1 -coverprofile=cover.out ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
         with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          name: coverage
+          path: cover.out
+          if-no-files-found: ignore
 
-      - name: Build E2E binary (linux/amd64)
-        run: |
-          mkdir -p .bin
-
-          GOOS=linux GOARCH=amd64 \
-            go build -trimpath -o .bin/tailsocks-e2e ./
-
-      - name: Upload E2E binary artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: tailsocks-e2e-linux-amd64
-          path: .bin/tailsocks-e2e
-          if-no-files-found: error
-          compression-level: 0
-
-  e2e-matrix:
-    name: E2E Matrix Config
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-    # Secrets are not available to workflows triggered by forked pull requests
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    outputs:
-      exit_nodes: ${{ steps.parse-exit-nodes.outputs.exit_nodes }}
-    env:
-      E2E_EXIT_NODES_RAW: ${{ secrets.TAILSOCKS_E2E_EXIT_NODE }}
     steps:
-      - name: Parse exit nodes
-        id: parse-exit-nodes
-        shell: bash
-        run: |
-          set -euo pipefail
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.11.4
+          args: --timeout 5m
 
-          if [[ -z "${E2E_EXIT_NODES_RAW}" ]]; then
-            echo "::error::Missing required secret TAILSOCKS_E2E_EXIT_NODE"
-            exit 1
-          fi
-
-          exit_nodes_json="$(
-            printf '%s' "${E2E_EXIT_NODES_RAW}" \
-              | tr ',' '\n' \
-              | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
-              | sed '/^$/d' \
-              | jq -R . \
-              | jq -s -c .
-          )"
-
-          if [[ "${exit_nodes_json}" == "[]" ]]; then
-            echo "::error::TAILSOCKS_E2E_EXIT_NODE did not contain any valid exit node values"
-            exit 1
-          fi
-
-          echo "exit_nodes=${exit_nodes_json}" >> "${GITHUB_OUTPUT}"
-
-  e2e:
-    name: E2E
+  build:
+    name: Build
     runs-on: ubuntu-latest
-    needs:
-      - test
-      - e2e-matrix
+    needs: [test]
     strategy:
-      fail-fast: false
       matrix:
-        auth_mode: [authkey, oauth2]
-        exit_node: ${{ fromJson(needs.e2e-matrix.outputs.exit_nodes) }}
-    permissions:
-      contents: read
-      id-token: write
-    # Secrets are not available to workflows triggered by forked pull requests
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        goos:   [linux, darwin]
+        goarch: [amd64, arm64]
     env:
-      E2E_EXIT_NODE: ${{ matrix.exit_node }}
-      # Optional
-      E2E_LOGIN_SERVER: ${{ secrets.TAILSOCKS_E2E_LOGIN_SERVER }}
-      E2E_EXPECTED_PROXY_IP: ${{ secrets.TAILSOCKS_E2E_EXPECTED_PROXY_IP }}
-      E2E_TAILSOCKS_BIN: ${{ github.workspace }}/.ci-bin/tailsocks-e2e
-      TS_OAUTH_CLIENT_ID: ${{ secrets.TAILSOCKS_E2E_TS_OAUTH_CLIENT_ID }}
-      TS_OAUTH_AUDIENCE: ${{ secrets.TAILSOCKS_E2E_TS_OAUTH_AUDIENCE }}
-      TS_OAUTH_TAG: ${{ secrets.TAILSOCKS_E2E_TS_OAUTH_TAG }}
+      CGO_ENABLED: "0"
+      GOOS:       ${{ matrix.goos }}
+      GOARCH:     ${{ matrix.goarch }}
     steps:
-
-      - name: Check out code
-        uses: actions/checkout@v6
-
-      - name: Download E2E binary artifact
-        uses: actions/download-artifact@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          name: tailsocks-e2e-linux-amd64
-          path: .ci-bin
-
-      - name: Make E2E binary executable
-        shell: bash
+          go-version-file: go.mod
+          cache: true
+      - name: Build flotilla (${{ matrix.goos }}/${{ matrix.goarch }})
         run: |
-          chmod +x "${E2E_TAILSOCKS_BIN}"
+          mkdir -p out
+          go build -trimpath -ldflags="-s -w" \
+            -o out/flotilla-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/flotilla
+          ls -lah out/
 
-      - name: Validate E2E secret configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${E2E_EXIT_NODE}" ]]; then
-            echo "::error::Missing required secret TAILSOCKS_E2E_EXIT_NODE"
-            exit 1
-          fi
-
-          if [[ -z "${TS_OAUTH_CLIENT_ID}" ]]; then
-            echo "::error::Missing required secret TAILSOCKS_E2E_TS_OAUTH_CLIENT_ID"
-            exit 1
-          fi
-
-          if [[ -z "${TS_OAUTH_AUDIENCE}" ]]; then
-            echo "::error::Missing required secret TAILSOCKS_E2E_TS_OAUTH_AUDIENCE"
-            exit 1
-          fi
-
-          if [[ -z "${TS_OAUTH_TAG}" ]]; then
-            echo "::error::Missing required secret TAILSOCKS_E2E_TS_OAUTH_TAG"
-            exit 1
-          fi
-
-      - name: Exchange GitHub OIDC token for Tailscale access token
-        id: ts-access-token
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          OIDC_TOKEN=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${TS_OAUTH_AUDIENCE}" \
-            | jq -r '.value')
-
-          if [[ -z "${OIDC_TOKEN}" || "${OIDC_TOKEN}" == "null" ]]; then
-            echo "Failed to get GitHub OIDC token"
-            exit 1
-          fi
-
-          echo "::add-mask::${OIDC_TOKEN}"
-
-          RESPONSE=$(curl -sS -X POST "https://api.tailscale.com/api/v2/oauth/token-exchange" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "client_id=${TS_OAUTH_CLIENT_ID}" \
-            -d "jwt=${OIDC_TOKEN}")
-
-          ACCESS_TOKEN=$(echo "${RESPONSE}" | jq -r '.access_token')
-
-          if [[ -z "${ACCESS_TOKEN}" || "${ACCESS_TOKEN}" == "null" ]]; then
-            echo "Failed to exchange token. Response: ${RESPONSE}"
-            exit 1
-          fi
-
-          echo "::add-mask::${ACCESS_TOKEN}"
-          echo "token=${ACCESS_TOKEN}" >> "${GITHUB_OUTPUT}"
-
-      - name: Create ephemeral auth key for authkey mode
-        id: ts-authkey
-        if: matrix.auth_mode == 'authkey'
-        shell: bash
-        env:
-          ACCESS_TOKEN: ${{ steps.ts-access-token.outputs.token }}
-        run: |
-          set -euo pipefail
-
-          TAG="${TS_OAUTH_TAG}"
-          if [[ "${TAG}" != tag:* ]]; then
-            TAG="tag:${TAG}"
-          fi
-
-          REQ_BODY="$(jq -n --arg tag "${TAG}" '{capabilities: {devices: {create: {reusable: false, ephemeral: true, preauthorized: true, tags: [$tag]}}}, expirySeconds: 300}')"
-          RESPONSE="$(curl -sS -X POST "https://api.tailscale.com/api/v2/tailnet/-/keys" \
-            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "${REQ_BODY}")"
-
-          AUTH_KEY="$(echo "${RESPONSE}" | jq -r '.key')"
-          if [[ -z "${AUTH_KEY}" || "${AUTH_KEY}" == "null" ]]; then
-            echo "Failed to create auth key. Response: ${RESPONSE}"
-            exit 1
-          fi
-
-          echo "::add-mask::${AUTH_KEY}"
-          echo "authkey=${AUTH_KEY}" >> "${GITHUB_OUTPUT}"
-
-      - name: Run E2E proxy test
-        shell: bash
-        env:
-          TAILSCALE_ACCESS_TOKEN: ${{ steps.ts-access-token.outputs.token }}
-          GENERATED_AUTHKEY: ${{ steps.ts-authkey.outputs.authkey }}
-        run: |
-          set -euo pipefail
-          export E2E_AUTH_MODE="${{ matrix.auth_mode }}"
-          if [[ "${E2E_AUTH_MODE}" == "authkey" ]]; then
-            export E2E_TS_AUTHKEY="${GENERATED_AUTHKEY}"
-          else
-            export E2E_TS_OAUTH_ACCESS_TOKEN="${TAILSCALE_ACCESS_TOKEN}"
-            export E2E_TS_OAUTH_TAG="${TS_OAUTH_TAG}"
-          fi
-          bash tests/e2e.sh
+  docker:
+    name: Docker (smoke build)
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Docker build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: flotilla:ci

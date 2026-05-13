@@ -1,4 +1,8 @@
-package main
+// Package auth handles Tailscale auth — either a static auth key (CLI/env)
+// or OAuth2 client credentials that mint an ephemeral, pre-approved auth key.
+//
+// Code is ported from upstream tailsocks/auth.go with minimal changes.
+package auth
 
 import (
 	"context"
@@ -14,9 +18,9 @@ import (
 	"time"
 )
 
-const userAgent = "tailsocks/1"
+const userAgent = "flotilla/1"
 
-// OAuth2Credentials represents the OAuth2 client credentials
+// OAuth2Credentials represents the OAuth2 client credentials.
 //
 //nolint:tagliatelle
 type OAuth2Credentials struct {
@@ -27,15 +31,15 @@ type OAuth2Credentials struct {
 	tagEncoded string
 }
 
+// GetAuthToken obtains an OAuth2 access token then mints a short-lived
+// Tailscale auth key tagged with c.Tag.
 func (c *OAuth2Credentials) GetAuthToken(ctx context.Context, ephemeral bool) (string, error) {
-	// Obtain an access token using OAuth2 client credentials flow
 	accessToken, err := c.getAccessToken(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get OAuth2 access token: %w", err)
 	}
 
-	// Use the access token to create a Tailscale auth key
-	authKey, err := c.createAuthKey(ctx, accessToken, ephemeral)
+	authKey, err := c.CreateAuthKey(ctx, accessToken, ephemeral)
 	if err != nil {
 		return "", fmt.Errorf("failed to create Tailscale auth key: %w", err)
 	}
@@ -49,7 +53,6 @@ func (c *OAuth2Credentials) prepareTag() error {
 		return errors.New("tag is required in credentials file")
 	}
 
-	// Ensure the "tag:" prefix is present
 	if !strings.HasPrefix(tag, "tag:") {
 		tag = "tag:" + tag
 	}
@@ -63,7 +66,6 @@ func (c *OAuth2Credentials) prepareTag() error {
 	return nil
 }
 
-// getAccessToken obtains an OAuth2 access token using client credentials flow
 func (c *OAuth2Credentials) getAccessToken(parentCtx context.Context) (string, error) {
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
@@ -118,8 +120,9 @@ func (c *OAuth2Credentials) getAccessToken(parentCtx context.Context) (string, e
 	return tokenRes.AccessToken, nil
 }
 
-// createAuthKey creates a Tailscale auth key using the OAuth2 access token
-func (c *OAuth2Credentials) createAuthKey(parentCtx context.Context, accessToken string, ephemeral bool) (string, error) {
+// CreateAuthKey turns a Tailscale OAuth2 access token into a single-use,
+// pre-authorized, tagged Tailscale auth key.
+func (c *OAuth2Credentials) CreateAuthKey(parentCtx context.Context, accessToken string, ephemeral bool) (string, error) {
 	if c.tagEncoded == "" {
 		err := c.prepareTag()
 		if err != nil {
@@ -127,12 +130,9 @@ func (c *OAuth2Credentials) createAuthKey(parentCtx context.Context, accessToken
 		}
 	}
 
-	// Create an ephemeral, single-use auth key
-	// The tailnet is determined automatically by the OAuth2 client
 	const reqBodyFmt = `{"capabilities": {"devices": {"create": {"reusable": false, "ephemeral": %v, "preauthorized": true, "tags": [%s]}}}, "expirySeconds": 300}`
 	reqBody := fmt.Sprintf(reqBodyFmt, ephemeral, c.tagEncoded)
 
-	// Use "-" as tailnet to indicate "the tailnet of the authenticated user"
 	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.tailscale.com/api/v2/tailnet/-/keys", strings.NewReader(reqBody))
@@ -176,17 +176,17 @@ func (c *OAuth2Credentials) createAuthKey(parentCtx context.Context, accessToken
 	return keyRes.Key, nil
 }
 
-// getCredentialsPath returns the path for OAuth2 credentials file
-func getCredentialsPath() (string, error) {
+// DefaultCredentialsPath is the canonical on-disk location for OAuth2 creds.
+func DefaultCredentialsPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(home, ".config", "tailsocks", "oauth2.json"), nil
+	return filepath.Join(home, ".config", "flotilla", "oauth2.json"), nil
 }
 
-// loadOAuth2Credentials loads OAuth2 credentials from a file
-func loadOAuth2Credentials(path string) (*OAuth2Credentials, error) {
+// LoadOAuth2Credentials reads + validates an OAuth2 credentials JSON file.
+func LoadOAuth2Credentials(path string) (*OAuth2Credentials, error) {
 	data, err := os.ReadFile(path) //nolint:gosec
 	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("OAuth2 credentials file '%s' does not exist", path)
@@ -217,33 +217,8 @@ func loadOAuth2Credentials(path string) (*OAuth2Credentials, error) {
 	return &creds, nil
 }
 
-// saveOAuth2Credentials saves OAuth2 credentials to a file
-// Currently unused, will be used in the future
-//
-//nolint:unused
-func saveOAuth2Credentials(path string, creds *OAuth2Credentials) error {
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(path)
-	err := os.MkdirAll(dir, 0700)
-	if err != nil {
-		return fmt.Errorf("failed to create credentials directory '%s': %w", dir, err)
-	}
-
-	// #nosec G117 - The credentials are meant to be saved to disk
-	data, err := json.MarshalIndent(creds, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to encode credentials as JSON: %w", err)
-	}
-
-	err = os.WriteFile(path, data, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to write credentials file '%s': %w", path, err)
-	}
-
-	return nil
-}
-
-func getAuthKeyFromEnv() string {
+// AuthKeyFromEnv reads TS_AUTHKEY or TS_AUTH_KEY from the environment.
+func AuthKeyFromEnv() string {
 	authKey := strings.TrimSpace(os.Getenv("TS_AUTHKEY"))
 	if authKey != "" {
 		slog.Info("Using auth key from environment TS_AUTHKEY")
@@ -259,10 +234,10 @@ func getAuthKeyFromEnv() string {
 	return ""
 }
 
-// determineEphemeralFlag calculates the ephemeral flag value based on CLI flags and default
-func determineEphemeralFlag(opts *Options, defaultValue bool) bool {
-	if opts.Ephemeral != nil {
-		return *opts.Ephemeral
-	}
-	return defaultValue
+// OAuthAccessTokenFromEnv returns a pre-issued OAuth2 access token, if one
+// has been provided via TS_OAUTH_ACCESS_TOKEN. Useful in CI / federated flows.
+func OAuthAccessTokenFromEnv() (token, tag string) {
+	token = strings.TrimSpace(os.Getenv("TS_OAUTH_ACCESS_TOKEN"))
+	tag = strings.TrimSpace(os.Getenv("TS_OAUTH_TAG"))
+	return token, tag
 }

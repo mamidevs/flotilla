@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.golangci.yaml
+*.md
+!NOTICE
+docker-compose.example.yaml
+examples
+state
+tsnet-state
+flotilla-state
+*.out
+*.log

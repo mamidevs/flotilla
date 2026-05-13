@@ -1,5 +1,13 @@
 /scratch
+/flotilla
 /tailsocks
+/state
+/tsnet-state
+/flotilla-state
+flotilla.yaml
+oauth2.json
+.env
+cover.out
 
 # Created by https://www.toptal.com/developers/gitignore/api/linux,macos,windows,visualstudiocode,go
 # Edit at https://www.toptal.com/developers/gitignore?templates=linux,macos,windows,visualstudiocode,go

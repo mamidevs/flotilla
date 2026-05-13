@@ -1,0 +1,32 @@
+Flotilla
+========
+
+Flotilla is a fork of:
+
+    tailsocks
+    https://github.com/ItalyPaleAle/tailsocks
+    Copyright (c) Alessandro (Ale) Segala
+    Licensed under the MIT License — see LICENSE.md
+
+Upstream code retained and used (with package renames):
+  - main.go::setExitNodePrefs and the tsnet.Server boot dance
+    → internal/worker/worker.go
+  - auth.go (OAuth2 client credentials → ephemeral auth key minting)
+    → internal/auth/oauth.go
+  - resolver.go (Tailscale MagicDNS resolver + TTL cache)
+    → internal/resolver/resolver.go
+  - buildinfo/buildinfo.go
+    → internal/buildinfo/buildinfo.go
+
+Net-new in Flotilla:
+  - cmd/flotilla            CLI with subcommands (run, init, ip, nodes, doctor)
+  - internal/config         YAML config parser + validator
+  - internal/pool           N-worker pool + Strategy interface (round_robin,
+                            random, sticky, least_active, tagged)
+  - internal/dispatcher     Front-end SOCKS5 + HTTP CONNECT dispatchers,
+                            with request-level pin / tag / sticky hints
+  - internal/admin          /health, /health/nodes, /ip, /metrics
+  - internal/metrics        Prometheus collectors
+
+The MIT license terms of the upstream apply to all retained code, and our
+own additions are released under the same MIT terms.

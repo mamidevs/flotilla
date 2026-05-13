@@ -1,0 +1,59 @@
+# scraper-pool.yaml — a realistic web-scraping setup.
+#
+# Five exit nodes in two regions, OAuth2 auth (each tsnet instance mints its
+# own ephemeral key), round-robin dispatch with 30s health probes.
+#
+# Frontends:
+#   socks5://127.0.0.1:5040           anonymous round-robin
+#   socks5://user:pass@127.0.0.1:5040 where user="tags=region:tr"
+#   http://127.0.0.1:5050             HTTP CONNECT
+#       X-Flotilla-Tags: region:eu
+#       X-Flotilla-Node: tr-2         (pin to a specific worker)
+
+listen:
+  socks: 0.0.0.0:5040
+  http:  0.0.0.0:5050
+  admin: 127.0.0.1:8080
+
+log:
+  level: info
+  format: auto
+
+dispatch:
+  strategy: round_robin
+  health_check:
+    enabled: true
+    interval: 30s
+    skip_unhealthy: true
+    probe_url: https://api.ipify.org
+    probe_timeout: 10s
+    egress_ip_lookup: true
+
+auth:
+  method: oauth2
+  oauth2_credentials: /etc/flotilla/oauth2.json
+  ephemeral: true
+
+nodes:
+  - name: tr-1
+    exit_node: tr-istanbul-1
+    state_dir: /state/tr-1
+    socks_addr: 0.0.0.0:5041
+    tags: [region:tr, scraper:a]
+  - name: tr-2
+    exit_node: tr-istanbul-2
+    state_dir: /state/tr-2
+    socks_addr: 0.0.0.0:5042
+    tags: [region:tr, scraper:b]
+  - name: tr-3
+    exit_node: tr-ankara-1
+    state_dir: /state/tr-3
+    tags: [region:tr]
+  - name: eu-1
+    exit_node: eu-amsterdam-1
+    state_dir: /state/eu-1
+    tags: [region:eu]
+  - name: eu-2
+    exit_node: eu-frankfurt-1
+    state_dir: /state/eu-2
+    tags: [region:eu]
