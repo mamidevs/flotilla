@@ -13,8 +13,6 @@ jobs:
   test:
     name: Test + Vet
     runs-on: ubuntu-latest
-    env:
-      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +30,8 @@ jobs:
         run: go vet ./...
 
       - name: Test (race + cover)
+        env:
+          CGO_ENABLED: "1"
         run: go test -race -count=1 -coverprofile=cover.out ./...
 
       - name: Upload coverage
@@ -51,7 +51,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
           args: --timeout 5m
