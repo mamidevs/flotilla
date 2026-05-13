@@ -62,10 +62,8 @@ func TestHintFromSocksUser_KeyValue(t *testing.T) {
 		if h.PinName != c.pin {
 			t.Errorf("user=%q: pin %q want %q", c.user, h.PinName, c.pin)
 		}
-		if !reflect.DeepEqual(h.Tags, c.tags) {
-			if !(len(h.Tags) == 0 && len(c.tags) == 0) {
-				t.Errorf("user=%q: tags %v want %v", c.user, h.Tags, c.tags)
-			}
+		if !reflect.DeepEqual(h.Tags, c.tags) && (len(h.Tags) != 0 || len(c.tags) != 0) {
+			t.Errorf("user=%q: tags %v want %v", c.user, h.Tags, c.tags)
 		}
 		if h.ClientID != c.clientID {
 			t.Errorf("user=%q: client %q want %q", c.user, h.ClientID, c.clientID)

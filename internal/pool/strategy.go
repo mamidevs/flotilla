@@ -62,6 +62,7 @@ func (r *random) Choose(_ context.Context, cs []*worker.Worker, _ Hint) (*worker
 	if len(cs) == 0 {
 		return nil, ErrNoHealthyWorker
 	}
+	// #nosec G404 -- load-balancing pick, not security-sensitive.
 	return cs[rand.IntN(len(cs))], nil
 }
 

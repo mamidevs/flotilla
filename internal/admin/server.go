@@ -90,14 +90,13 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 
 func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "flotilla %s\n", buildinfo.AppVersion)
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "endpoints:")
-	fmt.Fprintln(w, "  GET  /health")
-	fmt.Fprintln(w, "  GET  /health/nodes")
-	fmt.Fprintln(w, "  GET  /ip          # all nodes")
-	fmt.Fprintln(w, "  GET  /ip?node=X   # one node")
-	fmt.Fprintln(w, "  GET  /metrics     # Prometheus scrape")
+	_, _ = fmt.Fprintf(w, "flotilla %s\n\n", buildinfo.AppVersion)
+	_, _ = fmt.Fprintln(w, "endpoints:")
+	_, _ = fmt.Fprintln(w, "  GET  /health")
+	_, _ = fmt.Fprintln(w, "  GET  /health/nodes")
+	_, _ = fmt.Fprintln(w, "  GET  /ip          # all nodes")
+	_, _ = fmt.Fprintln(w, "  GET  /ip?node=X   # one node")
+	_, _ = fmt.Fprintln(w, "  GET  /metrics     # Prometheus scrape")
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

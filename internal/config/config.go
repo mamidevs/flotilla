@@ -153,9 +153,6 @@ func (c *Config) ApplyDefaults() {
 	if c.Dispatch.HealthCheck.ProbeURL == "" {
 		c.Dispatch.HealthCheck.ProbeURL = DefaultProbeURL
 	}
-	if !c.Dispatch.HealthCheck.Enabled && c.Dispatch.HealthCheck.Interval > 0 {
-		// keep zero-default explicit unless user opted in
-	}
 	if c.Auth.Method == "" {
 		if strings.TrimSpace(c.Auth.OAuth2Credentials) != "" {
 			c.Auth.Method = AuthMethodOAuth2
@@ -232,10 +229,7 @@ func (c *Config) Validate() error {
 // minting per-worker auth keys via OAuth2 or env vars before constructing
 // the workers.
 func (c *Config) ToWorkerConfigs() []worker.Config {
-	ephemeral := true // OAuth2 default
-	if c.Auth.Method == AuthMethodAuthKey {
-		ephemeral = false
-	}
+	ephemeral := c.Auth.Method != AuthMethodAuthKey // OAuth2 ephemeral by default
 	if c.Auth.Ephemeral != nil {
 		ephemeral = *c.Auth.Ephemeral
 	}

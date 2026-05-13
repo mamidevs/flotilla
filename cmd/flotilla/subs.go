@@ -66,9 +66,9 @@ func ipMain(args []string) {
 	}
 	sort.Strings(names)
 	tw := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "NODE\tEGRESS IP")
+	_, _ = fmt.Fprintln(tw, "NODE\tEGRESS IP")
 	for _, n := range names {
-		fmt.Fprintf(tw, "%s\t%v\n", n, m[n])
+		_, _ = fmt.Fprintf(tw, "%s\t%v\n", n, m[n])
 	}
 	_ = tw.Flush()
 }
@@ -105,9 +105,9 @@ func nodesMain(args []string) {
 	_ = json.Unmarshal(raw, &nodes)
 
 	tw := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tEXIT\tHEALTHY\tACTIVE\tEGRESS\tDNS")
+	_, _ = fmt.Fprintln(tw, "NAME\tEXIT\tHEALTHY\tACTIVE\tEGRESS\tDNS")
 	for _, n := range nodes {
-		fmt.Fprintf(tw, "%s\t%s\t%v\t%d\t%s\t%s\n", n.Name, n.ExitNode, n.Healthy, n.Active, n.EgressIP, n.DNSName)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%v\t%d\t%s\t%s\n", n.Name, n.ExitNode, n.Healthy, n.Active, n.EgressIP, n.DNSName)
 	}
 	_ = tw.Flush()
 }
